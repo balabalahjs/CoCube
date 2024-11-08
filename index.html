@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style>
+    button.pressed {
+      background-color: #4CAF50;
+      color: white;
+    }
+  </style>
+</head>
+
+<body>
+<div>
+  <h2>Robot Remote Control</h2>
+</div>
+<div style="height: 10px;"></div>
+<button type="button" onclick="bleSerial.connect()">Connect</button>
+<button type="button" onclick="bleSerial.disconnect()">Disconnect</button>
+<div id="connectStatus">Not Connected</div>
+<div style="height: 20px;"></div>
+
+<script type="text/javascript">
+  // Support for Web Bluetooth
+
+  const IDE_SERVICE_UUID = 'bb37a001-b922-4018-8e74-e14824b3a638';
+  const IDE_RX_CHAR_UUID = 'bb37a002-b922-4018-8e74-e14824b3a638';
+  const IDE_TX_CHAR_UUID = 'bb37a003-b922-4018-8e74-e14824b3a638';
+
+  const BLE_PACKET_LEN = 240; // Max BLE attribute length is 512 but 240 gives best performance
+
+  class BLESerial {
+    constructor() {
+      this.device = undefined;
+      this.service = undefined;
+      this.rx_char = undefined;
+      this.connected = false;
+      this.sendInProgress = false;
+    }
+
+    handle_disconnected(event) {
+      this.rx_char = undefined;
+      this.connected = false;
+      this.sendInProgress = false;
+    }
+
+    handle_read(event) {
+      let data = new Uint8Array(event.target.value.buffer);
+    }
+
+    async connect() {
+      this.device = await navigator.bluetooth.requestDevice({
+        filters: [{
+          services: [IDE_SERVICE_UUID]
+        }]
+      });
+      this.device.addEventListener('gattserverdisconnected', this.handle_disconnected.bind(this));
+      const server = await this.device.gatt.connect();
+      this.service = await server.getPrimaryService(IDE_SERVICE_UUID);
+      const tx_char = await this.service.getCharacteristic(IDE_TX_CHAR_UUID);
+      this.rx_char = await this.service.getCharacteristic(IDE_RX_CHAR_UUID);
+      await tx_char.startNotifications();
+      tx_char.addEventListener("characteristicvaluechanged", this.handle_read.bind(this));
+      this.connected = true;
+      this.sendInProgress = false;
+      console.log("MicroBlocks BLE connected");
+    }
+
+    disconnect() {
+      if (this.device) {
+        this.device.gatt.disconnect();
+      }
+    }
+
+    isConnected() {
+      return this.connected;
+    }
+
+    write_data(data) {
+      if (this.rx_char == undefined) {
+        throw TypeError("Not connected");
+      }
+      if (this.sendInProgress) {
+        return 0;
+      }
+      let byteCount = (data.length > BLE_PACKET_LEN)? BLE_PACKET_LEN : data.length;
+      this.write_loop(data.subarray(0, byteCount));
+      return byteCount;
+    }
+
+    async write_loop(data) {
+      this.sendInProgress = true;
+      try {
+        await this.rx_char.writeValue(data);
+      } catch (error) {
+        console.log(error);
+        this.handle_disconnected();
+      }
+      this.sendInProgress = false;
+      return;
+    }
+  }
+
+  function updateConnectStatus() {
+    var status = bleSerial.isConnected()? "Connected" : "Not Connected";
+    document.getElementById("connectStatus").innerHTML = status;
+  }
+
+  function sendCommand(key) {
+    if (bleSerial.isConnected()) {
+      var cmdBytes = new TextEncoder().encode(key);
+      var len = cmdBytes.length + 1;
+      var broadcastMsg = new Uint8Array(5 + len);
+      broadcastMsg.set([0xFB, 0x1B, 0, (len & 255), (len >> 8) & 255]);
+      broadcastMsg.set(cmdBytes, 5);
+      broadcastMsg.set([0xFE], len + 4);
+      bleSerial.write_data(broadcastMsg);
+    } else {
+      console.log("'" + key + "', but not connected");
+    }
+  }
+
+  const bleSerial = new BLESerial();
+  setInterval(updateConnectStatus, 500);
+
+  // Listen for keyboard events
+  document.addEventListener('keydown', (event) => {
+    const key = event.key.toUpperCase();
+    if (key === 'W' || key === 'A' || key === 'S' || key === 'D') {
+      sendCommand(key);
+      console.log("Key pressed:", key);
+      // Add visual feedback for button presses
+      if (key === 'W') {
+        document.getElementById('wButton').classList.add('pressed');
+      } else if (key === 'A') {
+        document.getElementById('aButton').classList.add('pressed');
+      } else if (key === 'S') {
+        document.getElementById('sButton').classList.add('pressed');
+      } else if (key === 'D') {
+        document.getElementById('dButton').classList.add('pressed');
+      }
+    }
+  });
+
+  //Cancel the previously pressed key
+  document.addEventListener('keyup', (event) => {
+    const key = event.key.toUpperCase();
+    if (key === 'W' || key === 'A' || key === 'S' || key === 'D') {
+      // Remove visual feedback on key release
+      if (key === 'W') {
+        document.getElementById('wButton').classList.remove('pressed');
+      } else if (key === 'A') {
+        document.getElementById('aButton').classList.remove('pressed');
+      } else if (key === 'S') {
+        document.getElementById('sButton').classList.remove('pressed');
+      } else if (key === 'D') {
+        document.getElementById('dButton').classList.remove('pressed');
+      }
+    }
+  });
+</script>
+
+<button id="wButton" style="width: 50px; height: 50px;">W</button>
+<button id="aButton" style="width: 50px; height: 50px;">A</button>
+<button id="sButton" style="width: 50px; height: 50px;">S</button>
+<button id="dButton" style="width: 50px; height: 50px;">D</button>
+</body>
+
+</html>
